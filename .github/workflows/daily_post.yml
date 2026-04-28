@@ -2,10 +2,7 @@ name: YouTube Auto Publisher
 
 on:
   schedule:
-    # New York: 5:55 PM (17:55)
-    # India: 4:25 AM (Agle din)
-    # UTC: 10:55 PM (22:55)
-    - cron: '55 22 * * *'
+    - cron: '0 * * * *'
   workflow_dispatch: # Button to run manually for testing
 
 jobs:
