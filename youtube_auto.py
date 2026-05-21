@@ -132,6 +132,7 @@ def send_telegram_alert(video_id, channel_name):
     }
     
     requests.post(url, json=payload)
+
 def main():
     try:
         print(f"--- STARTING AUTOMATION ---")
@@ -147,17 +148,17 @@ def main():
         print(f"✅ Channel Connected: {channel_response['items'][0]['snippet']['title']}")
 
         # 2. Get Recent Videos (Includes Private/Unlisted)
+        # Increased maxResults to 50 to scan more videos at once
         playlist_request = youtube.playlistItems().list(
             part="contentDetails",
             playlistId=uploads_playlist_id,
-            maxResults=10  
+            maxResults=50  
         )
         playlist_response = playlist_request.execute()
         
-        target_video_id = None
-        target_video_snippet = None
+        videos_processed = 0
         
-        # 3. Find Unlisted/Private Video
+        # 3. Find and loop through ALL Unlisted/Private Videos
         for item in playlist_response.get("items", []):
             vid_id = item["contentDetails"]["videoId"]
             
@@ -173,91 +174,89 @@ def main():
             video_data = vid_response["items"][0]
             privacy = video_data["status"]["privacyStatus"]
             
+            # Agar video private ya unlisted hai to process karega
             if privacy in ["private", "unlisted"]:
-                target_video_id = vid_id
-                target_video_snippet = video_data["snippet"]
-                print(f"Target Found: {vid_id} | Status: {privacy}")
-                break 
+                snippet = video_data["snippet"]
+                print(f"\n--- Target Found: {vid_id} | Current Status: {privacy} ---")
+                
+                # --- AI & CONTENT LOGIC ---
+                
+                # A) TITLE GENERATION
+                current_title = snippet["title"]
+                new_title = current_title
+                
+                if should_replace_title(current_title):
+                    print("Generating new AI Title...")
+                    ai_title = ask_pollinations_ai(CONFIG["title_prompt"])
+                    if ai_title:
+                        new_title = ai_title.replace('"', '').replace("'", "")
+                        if len(new_title) > 70: new_title = new_title[:67] + "..."
+                else:
+                    print("Keeping existing title.")
+                
+                # B) DESCRIPTION GENERATION
+                print("AI Writing Description...")
+                ai_desc = ask_pollinations_ai(CONFIG["desc_prompt"])
+                if not ai_desc:
+                    ai_desc = "Motivational video."
+                    
+                final_description = f"{ai_desc}\n\n{CONFIG['seo_hashtags']}"
+                
+                # C) TAGS LOGIC (SMART FIX)
+                raw_tags = CONFIG["tags"]
+                final_tags = []
+
+                # Check: Agar tags ek hi string mein hain (space separated)
+                if len(raw_tags) == 1 and " " in raw_tags[0]:
+                    print("Fixing Tags format automatically...")
+                    final_tags = [t.replace("#", "") for t in raw_tags[0].split() if t.strip()]
+                else:
+                    final_tags = raw_tags
+
+                # Ensure Minimum Tags
+                if len(final_tags) < 8:
+                    final_tags.extend(["Viral", "Trending", "Must Watch", "New Video", "Shorts"])
+
+                # Remove Duplicates & Limit to 30 tags
+                final_tags = list(set(final_tags))[:30]
+                print(f"Total Tags to Add: {len(final_tags)}")
+
+                # --- UPDATE VIDEO ---
+                update_body = {
+                    "id": vid_id,
+                    "snippet": {
+                        "categoryId": CONFIG["category_id"],
+                        "title": new_title,
+                        "description": final_description,
+                        "tags": final_tags, 
+                        "channelTitle": snippet.get("channelTitle", CHANNEL_CUSTOM_NAME)
+                    },
+                    "status": {
+                        "privacyStatus": "public",
+                        "selfDeclaredMadeForKids": False,
+                        "embeddable": True,
+                        "license": "youtube"
+                    }
+                }
+                
+                youtube.videos().update(
+                    part="snippet,status",
+                    body=update_body
+                ).execute()
+                
+                print(f"SUCCESS: Video Public | Title: {new_title}")
+                
+                # Telegram Alert
+                display_name = snippet.get("channelTitle", CHANNEL_CUSTOM_NAME)
+                send_telegram_alert(vid_id, display_name)
+                
+                videos_processed += 1
         
-        if not target_video_id:
+        # Loop khatam hone ke baad summary
+        if videos_processed == 0:
             print("No Unlisted/Private videos found.")
-            return
-
-        vid_id = target_video_id
-        snippet = target_video_snippet
-        
-        # --- AI & CONTENT LOGIC ---
-        
-        # A) TITLE GENERATION
-        current_title = snippet["title"]
-        new_title = current_title
-        
-        if should_replace_title(current_title):
-            print("Generating new AI Title...")
-            ai_title = ask_pollinations_ai(CONFIG["title_prompt"])
-            if ai_title:
-                new_title = ai_title.replace('"', '').replace("'", "")
-                if len(new_title) > 70: new_title = new_title[:67] + "..."
         else:
-            print("Keeping existing title.")
-        
-        # B) DESCRIPTION GENERATION
-        print("AI Writing Description...")
-        ai_desc = ask_pollinations_ai(CONFIG["desc_prompt"])
-        if not ai_desc:
-            ai_desc = "Motivational video."
-            
-        final_description = f"{ai_desc}\n\n{CONFIG['seo_hashtags']}"
-        
-        # C) TAGS LOGIC (SMART FIX)
-        raw_tags = CONFIG["tags"]
-        final_tags = []
-
-        # Check: Agar tags ek hi string mein hain (space separated)
-        if len(raw_tags) == 1 and " " in raw_tags[0]:
-            # String ko tod kar list banao aur '#' hatao
-            print("Fixing Tags format automatically...")
-            final_tags = [t.replace("#", "") for t in raw_tags[0].split() if t.strip()]
-        else:
-            final_tags = raw_tags
-
-        # Ensure Minimum Tags
-        if len(final_tags) < 8:
-            final_tags.extend(["Viral", "Trending", "Must Watch", "New Video", "Shorts"])
-
-        # Remove Duplicates & Limit to 30 tags
-        final_tags = list(set(final_tags))[:30]
-        print(f"Total Tags to Add: {len(final_tags)}")
-
-        # --- UPDATE VIDEO ---
-        
-        update_body = {
-            "id": vid_id,
-            "snippet": {
-                "categoryId": CONFIG["category_id"],
-                "title": new_title,
-                "description": final_description,
-                "tags": final_tags,  # Ab yahan poori list jayegi
-                "channelTitle": snippet["channelTitle"]
-            },
-            "status": {
-                "privacyStatus": "public",
-                "selfDeclaredMadeForKids": False,
-                "embeddable": True,
-                "license": "youtube"
-            }
-        }
-        
-        youtube.videos().update(
-            part="snippet,status",
-            body=update_body
-        ).execute()
-        
-        print(f"SUCCESS: Video Public | Title: {new_title}")
-        
-        # Telegram Alert
-        display_name = snippet["channelTitle"] if snippet["channelTitle"] else CHANNEL_CUSTOM_NAME
-        send_telegram_alert(vid_id, display_name)
+            print(f"\n--- AUTOMATION COMPLETED. Total {videos_processed} videos published. ---")
 
     except Exception as e:
         print(f"CRITICAL ERROR: {e}")
